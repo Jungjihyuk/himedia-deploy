@@ -1,0 +1,148 @@
+# docker-compose.yml
+# 🎯 Docker Compose: 여러 컨테이너를 한 번에 관리하는 설정 파일
+# 💡 'docker-compose up' 명령어 하나로 postgres, backend, frontend를 모두 실행!
+
+services:  # 🏗️ 실행할 서비스(컨테이너)들을 정의하는 섹션
+  
+  # ═══════════════════════════════════════════════════════════
+  # 📦 SERVICE 1: PostgreSQL 데이터베이스
+  # ═══════════════════════════════════════════════════════════
+  postgres:  # 서비스 이름 (다른 서비스에서 'postgres'로 참조 가능)
+    
+    # 🎨 image: Docker Hub에서 가져올 이미지 지정
+    # postgres:18 = PostgreSQL 버전 18 공식 이미지
+    # 💡 Dockerfile 없이 바로 사용 가능! (공식 이미지라서)
+    image: postgres:18 
+    
+    # 🏷️ container_name: 실제 생성될 컨테이너의 이름
+    # 지정 안 하면 "프로젝트명-서비스명-1" 같은 이름으로 자동 생성됨
+    container_name: postgres-db
+    
+    # 🌍 environment: 컨테이너 내부에서 사용할 환경변수 설정
+    # PostgreSQL 컨테이너가 시작될 때 이 값들을 읽어서 초기 설정함
+    environment:
+      # ${변수명} = .env 파일에서 값을 자동으로 가져옴 (dotenv와 동일)
+      POSTGRES_DB: ${DB_NAME}        # 생성할 데이터베이스 이름
+      POSTGRES_USER: ${DB_USER}      # 데이터베이스 사용자 이름
+      POSTGRES_PASSWORD: ${DB_PASSWORD}  # 데이터베이스 비밀번호
+    
+    # 🔌 ports: 포트 매핑 (외부에서 접근 가능하도록)
+    # "호스트포트:컨테이너포트" 형식
+    ports:
+      - "5432:5432"  
+      # 왼쪽 5432 = 내 컴퓨터(호스트)의 포트
+      # 오른쪽 5432 = 컨테이너 내부의 PostgreSQL 포트
+      # 💡 localhost:5432로 접속하면 컨테이너의 PostgreSQL에 연결됨!
+    
+    # 💾 volumes: 데이터를 영구적으로 저장하기 위한 설정
+    volumes:
+      # "볼륨이름:컨테이너내부경로" 형식
+      - postgres_data:/var/lib/postgresql/
+      # postgres_data = Docker가 관리하는 저장 공간 (Named Volume)
+      # /var/lib/postgresql/ = PostgreSQL이 데이터를 저장하는 컨테이너 내부 경로
+      # 💡 컨테이너를 삭제해도 postgres_data에 저장된 데이터는 유지됨!
+      # ⚠️ 볼륨을 사용 안 하면? 컨테이너 삭제 시 모든 데이터 날아감!
+    
+    # 🏥 healthcheck: 컨테이너가 정상 작동하는지 주기적으로 체크
+    # 다른 서비스들이 postgres가 완전히 준비될 때까지 기다리게 함
+    healthcheck:
+      # 실행할 체크 명령어
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      # pg_isready = PostgreSQL이 연결 가능한 상태인지 확인하는 명령어
+      # -U = 사용자명 지정
+      # -d = 데이터베이스명 지정
+      
+      interval: 10s  # ⏱️ 10초마다 healthcheck 실행
+      timeout: 5s    # ⏳ 5초 이내에 응답 없으면 실패로 판단
+      retries: 5     # 🔄 5번까지 재시도 (5번 다 실패하면 unhealthy 상태)
+      # 💡 healthy 상태가 되어야 다른 서비스들이 시작됨!
+
+  # ═══════════════════════════════════════════════════════════
+  # 🚀 SERVICE 2: FastAPI 백엔드 서버
+  # ═══════════════════════════════════════════════════════════
+  backend:
+    
+    # 🔨 build: Dockerfile을 사용해서 이미지를 직접 빌드
+    # image 대신 build를 쓰면 = 이미지를 다운받는 게 아니라 만드는 것!
+    build: ./backend  
+    # ./backend 폴더의 Dockerfile을 찾아서 이미지 빌드
+    # 💡 ./backend/Dockerfile이 있어야 함!
+    
+    container_name: fastapi-server  # 생성될 컨테이너 이름
+    
+    # 🌍 environment: FastAPI 서버에서 사용할 환경변수
+    environment:
+      DATABASE_URL: ${DB_URL}
+      # FastAPI에서 PostgreSQL에 연결할 때 사용하는 URL
+      # 💡 보통 "postgresql://user:password@host:port/dbname" 형식
+      # 여기서 host는 'postgres'(서비스 이름)를 사용!
+      # 예: postgresql://myuser:mypass@postgres:5432/mydb
+    
+    # 🔌 ports: FastAPI 서버 포트 매핑
+    ports:
+      - "8000:8000"
+      # 왼쪽 8000 = 브라우저에서 localhost:8000으로 접속
+      # 오른쪽 8000 = 컨테이너 내부에서 FastAPI가 실행되는 포트
+    
+    # ⛓️ depends_on: 서비스 시작 순서 제어
+    depends_on:
+      postgres:  # postgres 서비스에 의존
+        condition: service_healthy  # ✅ postgres가 healthy 상태일 때만 시작
+        # 💡 healthcheck가 성공해야 backend가 시작됨!
+        # ⚠️ condition 없이 depends_on만 쓰면?
+        #    postgres 컨테이너만 실행되면 바로 시작 (완전히 준비 안 돼도!)
+        #    → DB 연결 실패 에러 발생 가능!
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚛️ SERVICE 3: React 프론트엔드
+  # ═══════════════════════════════════════════════════════════
+  frontend:
+    
+    # 🔨 build: 더 세밀한 빌드 설정
+    build: 
+      context: ./frontend  # Dockerfile이 있는 경로
+      
+      # 🎯 args: Dockerfile의 ARG에 전달할 빌드 인자
+      args:
+        VITE_FASTAPI_HOST: ${VITE_FASTAPI_HOST}
+        # Dockerfile에서 ARG VITE_FASTAPI_HOST로 받을 수 있음
+        # 💡 빌드 시점에만 사용되는 변수! (런타임 X)
+        # React 앱을 빌드할 때 API 서버 주소를 설정하기 위해 사용
+        # 예: VITE_FASTAPI_HOST=http://localhost:8000
+    
+    container_name: react-app  # 컨테이너 이름
+    
+    # 🔌 ports: React 개발 서버 포트
+    ports:
+      - "3000:3000"
+      # localhost:3000으로 React 앱에 접속 가능
+    
+    # ⛓️ depends_on: backend가 시작된 후에 frontend 시작
+    depends_on:
+      - backend
+      # 💡 condition이 없어서 backend 컨테이너만 실행되면 frontend도 시작
+      # frontend는 backend가 완전히 준비 안 돼도 괜찮음
+      # (보통 프론트엔드가 API 요청 실패 시 재시도하기 때문)
+
+# ═══════════════════════════════════════════════════════════
+# 💾 VOLUMES: 데이터 영구 저장 공간 정의
+# ═══════════════════════════════════════════════════════════
+volumes:
+  postgres_data:  # Named Volume 선언
+  # 💡 Docker가 관리하는 특별한 저장 공간!
+  # 🔍 실제 위치는 Docker가 자동으로 관리 (보통 /var/lib/docker/volumes/)
+  # ✅ 장점:
+  #    1. 컨테이너 삭제해도 데이터 유지
+  #    2. 다른 컨테이너와 공유 가능
+  #    3. Docker가 자동으로 최적화
+  # 
+  # 📊 Named Volume vs Bind Mount 비교:
+  # ┌─────────────────┬───────────────────┬──────────────────────┐
+  # │                 │ Named Volume      │ Bind Mount           │
+  # ├─────────────────┼───────────────────┼──────────────────────┤
+  # │ 형식            │ volume_name:/path │ /host/path:/path     │
+  # │ 관리            │ Docker 자동       │ 사용자 직접          │
+  # │ 위치            │ Docker 영역       │ 호스트 파일시스템    │
+  # │ 용도            │ 데이터 영구 저장  │ 코드 실시간 반영     │
+  # │ 예시            │ postgres_data     │ ./backend:/app       │
+  # └─────────────────┴───────────────────┴──────────────────────┘
